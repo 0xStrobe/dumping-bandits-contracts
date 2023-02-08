@@ -7,7 +7,7 @@ import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {ReentrancyGuard} from "solmate/utils/ReentrancyGuard.sol";
 import "openzeppelin-contracts/contracts/utils/Strings.sol";
 
-import {IRandomness} from "./interfaces/IRandomness.sol";
+import {IRandomnessClient} from "./interfaces/IRandomnessClient.sol";
 
 error NOT_OWNER();
 error WRONG_PRICE();
@@ -17,18 +17,18 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     using SafeTransferLib for ERC20;
 
     address public owner;
-    IRandomness public randomness;
+    IRandomnessClient public rc;
 
-    constructor(address _randomness) ERC721("Dumping Bandits", "BANDIT") {
+    constructor(address _rc) ERC721("Dumping Bandits", "BANDIT") {
         owner = msg.sender;
-        randomness = IRandomness(_randomness);
+        rc = IRandomnessClient(_rc);
     }
 
     uint256 public roundId = 0;
     uint256 public participantsPerRound = 100;
     uint256 public price = 10 ether;
 
-    event RandomnessSet(address randomness);
+    event RandomnessClientSet(address randomness);
     event OwnerSet(address owner);
 
     event RoundStarted(uint256 indexed roundId, uint256 participantsPerRound);
@@ -47,9 +47,9 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         return string(abi.encodePacked("https://dumpingbandits.canto.life/nft/", Strings.toString(id)));
     }
 
-    function setRandomness(address _randomness) public onlyOwner {
-        randomness = IRandomness(_randomness);
-        emit RandomnessSet(_randomness);
+    function setRandomness(address _rc) public onlyOwner {
+        rc = IRandomnessClient(_rc);
+        emit RandomnessClientSet(_rc);
     }
 
     function setOwner(address _owner) public onlyOwner {
