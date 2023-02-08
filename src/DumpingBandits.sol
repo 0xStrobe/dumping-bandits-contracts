@@ -76,7 +76,9 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function _startRound() internal {
-        roundId++;
+        unchecked {
+            roundId++;
+        }
         totalParticipants = 0;
         emit RoundStarted(roundId, participantsPerRound);
     }
