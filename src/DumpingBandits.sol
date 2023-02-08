@@ -26,7 +26,10 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     uint256 public roundId = 0;
 
-    // uh yis indeed, dis can be modified by owner butta only to ze next round (current round issa not affected)
+    /*//////////////////////////////////////////////////////////////
+                                GAME RULES
+    //////////////////////////////////////////////////////////////*/
+    // uh yis indeed, dis can be modified by owner butta only applies to ze next round (current round issa not affected)
     uint256 public price = 10 ether;
     uint256 public minParticipants = 100;
     uint256 public minDuration = 15 minutes;
@@ -36,6 +39,9 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     uint256 public finalizerReward = 10 ether;
 
+    /*//////////////////////////////////////////////////////////////
+                            HISTORYYYYYYYYY
+    //////////////////////////////////////////////////////////////*/
     struct Round {
         uint256 id;
         uint256 randomness;
@@ -51,6 +57,9 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
     mapping(uint256 => Round) public rounds;
 
+    /*//////////////////////////////////////////////////////////////
+                                EVENTS
+    //////////////////////////////////////////////////////////////*/
     event OwnerSet(address owner);
     event RandomnessClientSet(address rc);
     event PriceSet(uint256 price);
@@ -63,16 +72,25 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     event ParticipantAdded(uint256 indexed roundId, address indexed participant);
 
+    /*//////////////////////////////////////////////////////////////
+                        MODIFIERS CUZ IM LAZYYY
+    //////////////////////////////////////////////////////////////*/
     modifier onlyOwner() {
         if (msg.sender != owner) revert NOT_OWNER();
         _;
     }
 
+    /*//////////////////////////////////////////////////////////////
+                                NFT STUFF
+    //////////////////////////////////////////////////////////////*/
     function tokenURI(uint256 id) public pure override returns (string memory) {
         // TODO: implement traits n stuff
         return string(abi.encodePacked("https://dumpingbandits.canto.life/nft/", Strings.toString(id)));
     }
 
+    /*//////////////////////////////////////////////////////////////
+                            GAME RULE SETTERS
+    //////////////////////////////////////////////////////////////*/
     function setOwner(address _owner) public onlyOwner {
         owner = _owner;
         emit OwnerSet(_owner);
@@ -102,6 +120,10 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         finalizerReward = _finalizerReward;
         emit FinalizerRewardSet(_finalizerReward);
     }
+
+    /*//////////////////////////////////////////////////////////////
+                                GAME LOGIC
+    //////////////////////////////////////////////////////////////*/
 
     function participate() public payable nonReentrant {
         if (msg.value != price) revert WRONG_PRICE();
