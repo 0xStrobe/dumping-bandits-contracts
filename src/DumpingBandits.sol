@@ -11,7 +11,9 @@ import {IRandomnessClient} from "./interfaces/IRandomnessClient.sol";
 
 error NOT_OWNER();
 error WRONG_PRICE();
-error TOO_EARLY();
+error ROUND_NOT_STARTED();
+error ROUND_NOT_OVER();
+error ZERO_ADDRESS();
 
 contract DumpingBandits is ERC721, ReentrancyGuard {
     using SafeTransferLib for ERC20;
@@ -20,6 +22,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     IRandomnessClient public rc;
 
     constructor(address _rc) ERC721("Dumping Bandits", "BANDIT") {
+        if (_rc == address(0)) revert ZERO_ADDRESS();
         owner = msg.sender;
         rc = IRandomnessClient(_rc);
     }
@@ -51,11 +54,11 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         // ze following issa only updated wen ze round issa finalized
         uint256 roundStartedAt;
         uint256 totalParticipants;
-        mapping(address => bool) participants;
     }
 
     // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
     mapping(uint256 => Round) public rounds;
+    mapping(uint256 => mapping(address => bool)) public participants;
 
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
@@ -73,10 +76,24 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     event ParticipantAdded(uint256 indexed roundId, address indexed participant);
 
     /*//////////////////////////////////////////////////////////////
-                        MODIFIERS CUZ IM LAZYYY
+                        HELPERS CUZ IM LAZYYYYYYYY
     //////////////////////////////////////////////////////////////*/
     modifier onlyOwner() {
         if (msg.sender != owner) revert NOT_OWNER();
+        _;
+    }
+
+    function _isRoundStarted() internal view returns (bool) {
+        return roundStartedAt != 0;
+    }
+
+    function _isRoundOver() internal view returns (bool) {
+        return _isRoundStarted() && (block.timestamp >= roundStartedAt + minDuration)
+            && (totalParticipants >= minParticipants);
+    }
+
+    modifier onlyRoundOver() {
+        if (!_isRoundOver()) revert ROUND_NOT_OVER();
         _;
     }
 
@@ -97,6 +114,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function setRandomnessClient(address _rc) public onlyOwner {
+        if (_rc == address(0)) revert ZERO_ADDRESS();
         rc = IRandomnessClient(_rc);
         emit RandomnessClientSet(_rc);
     }
@@ -124,38 +142,50 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     /*//////////////////////////////////////////////////////////////
                                 GAME LOGIC
     //////////////////////////////////////////////////////////////*/
-
-    function participate() public payable nonReentrant {
-        if (msg.value != price) revert WRONG_PRICE();
-        if (totalParticipants >= minParticipants) revert ROUND_FULL();
-
-        // add participant to the current round
-        rounds[roundId][msg.sender] = true;
-        unchecked {
-            totalParticipants++;
-        }
-
-        emit ParticipantAdded(roundId, msg.sender);
-
-        // TODO: new logic as discussed
-        // // if the round is full, start a new one
-        // if (totalParticipants == minParticipants) {
-        //     _endRound();
-        // }
-    }
-
     function _startRound() internal {
         unchecked {
             roundId++;
         }
         totalParticipants = 0;
-        emit RoundStarted(roundId, participantsPerRound);
+        roundStartedAt = block.timestamp;
+
+        Round memory round = Round({
+            id: roundId,
+            randomness: 0,
+            price: price,
+            minParticipants: minParticipants,
+            minDuration: minDuration,
+            roundStartedAt: roundStartedAt,
+            totalParticipants: totalParticipants
+        });
+
+        rounds[roundId] = round;
+        emit RoundStarted(roundId, minParticipants, minDuration);
     }
 
-    function _endRound() internal {
+    function participate() public payable nonReentrant {
+        if (msg.value != price) revert WRONG_PRICE();
+        if (!_isRoundStarted()) {
+            _startRound();
+        }
+
+        // add participant to the current round
+        participants[roundId][msg.sender] = true;
+        unchecked {
+            totalParticipants++;
+        }
+
+        emit ParticipantAdded(roundId, msg.sender);
+    }
+
+    function finalizeRound() public onlyRoundOver nonReentrant {
+        uint256 randomness = rc.generateRandomness();
         // TODO: distribute or make claimable the prize
-        // TODO: also burn the gas token
-        // emit RoundEnded(roundId, randomness);
+
+        // transfer finalizer reward to msg.sender and burn the rest
+        payable(msg.sender).transfer(finalizerReward);
+        payable(address(0)).transfer(address(this).balance);
+        emit RoundFinalized(roundId, randomness);
     }
 
     /// @dev Derives a winner from a random number, round id, total participants, and weight (wad) of this winner.
