@@ -11,7 +11,7 @@ import {IRandomnessClient} from "./interfaces/IRandomnessClient.sol";
 
 error NOT_OWNER();
 error WRONG_PRICE();
-error ROUND_FULL();
+error TOO_EARLY();
 
 contract DumpingBandits is ERC721, ReentrancyGuard {
     using SafeTransferLib for ERC20;
@@ -25,18 +25,43 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     uint256 public roundId = 0;
-    uint256 public participantsPerRound = 100;
+
+    // uh yis indeed, dis can be modified by owner butta only to ze next round (current round issa not affected)
     uint256 public price = 10 ether;
+    uint256 public minParticipants = 100;
+    uint256 public minDuration = 15 minutes;
 
-    event RandomnessClientSet(address randomness);
-    event OwnerSet(address owner);
-
-    event RoundStarted(uint256 indexed roundId, uint256 participantsPerRound);
-    event RoundEnded(uint256 indexed roundId, uint256 randomness);
-    event ParticipantAdded(uint256 indexed roundId, address participant);
-
-    mapping(uint256 => mapping(address => bool)) public rounds;
+    uint256 public roundStartedAt = 0;
     uint256 public totalParticipants = 0;
+
+    uint256 public finalizerReward = 10 ether;
+
+    struct Round {
+        uint256 id;
+        uint256 randomness;
+        uint256 price;
+        uint256 minParticipants;
+        uint256 minDuration;
+        // ze following issa only updated wen ze round issa finalized
+        uint256 roundStartedAt;
+        uint256 totalParticipants;
+        mapping(address => bool) participants;
+    }
+
+    // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
+    mapping(uint256 => Round) public rounds;
+
+    event OwnerSet(address owner);
+    event RandomnessClientSet(address rc);
+    event PriceSet(uint256 price);
+    event MinParticipantsSet(uint256 minParticipants);
+    event MinDurationSet(uint256 minDuration);
+    event FinalizerRewardSet(uint256 finalizerReward);
+
+    event RoundStarted(uint256 indexed roundId, uint256 minParticipants, uint256 minDuration);
+    event RoundFinalized(uint256 indexed roundId, uint256 randomness);
+
+    event ParticipantAdded(uint256 indexed roundId, address indexed participant);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NOT_OWNER();
@@ -44,12 +69,8 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function tokenURI(uint256 id) public pure override returns (string memory) {
+        // TODO: implement traits n stuff
         return string(abi.encodePacked("https://dumpingbandits.canto.life/nft/", Strings.toString(id)));
-    }
-
-    function setRandomness(address _rc) public onlyOwner {
-        rc = IRandomnessClient(_rc);
-        emit RandomnessClientSet(_rc);
     }
 
     function setOwner(address _owner) public onlyOwner {
@@ -57,9 +78,34 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         emit OwnerSet(_owner);
     }
 
+    function setRandomnessClient(address _rc) public onlyOwner {
+        rc = IRandomnessClient(_rc);
+        emit RandomnessClientSet(_rc);
+    }
+
+    function setPrice(uint256 _price) public onlyOwner {
+        price = _price;
+        emit PriceSet(_price);
+    }
+
+    function setMinParticipants(uint256 _minParticipants) public onlyOwner {
+        minParticipants = _minParticipants;
+        emit MinParticipantsSet(_minParticipants);
+    }
+
+    function setMinDuration(uint256 _minDuration) public onlyOwner {
+        minDuration = _minDuration;
+        emit MinDurationSet(_minDuration);
+    }
+
+    function setFinalizerReward(uint256 _finalizerReward) public onlyOwner {
+        finalizerReward = _finalizerReward;
+        emit FinalizerRewardSet(_finalizerReward);
+    }
+
     function participate() public payable nonReentrant {
         if (msg.value != price) revert WRONG_PRICE();
-        if (totalParticipants >= participantsPerRound) revert ROUND_FULL();
+        if (totalParticipants >= minParticipants) revert ROUND_FULL();
 
         // add participant to the current round
         rounds[roundId][msg.sender] = true;
@@ -69,10 +115,11 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
         emit ParticipantAdded(roundId, msg.sender);
 
-        // if the round is full, start a new one
-        if (totalParticipants == participantsPerRound) {
-            _endRound();
-        }
+        // TODO: new logic as discussed
+        // // if the round is full, start a new one
+        // if (totalParticipants == minParticipants) {
+        //     _endRound();
+        // }
     }
 
     function _startRound() internal {
