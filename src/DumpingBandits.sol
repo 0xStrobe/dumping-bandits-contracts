@@ -3,6 +3,7 @@ pragma solidity ^0.8.18;
 
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
+import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {ReentrancyGuard} from "solmate/utils/ReentrancyGuard.sol";
 import "openzeppelin-contracts/contracts/utils/Strings.sol";
@@ -11,12 +12,14 @@ import {IRandomnessClient} from "./interfaces/IRandomnessClient.sol";
 
 error NOT_OWNER();
 error WRONG_PRICE();
+error ZERO_WINNERS();
 error ROUND_NOT_STARTED();
 error ROUND_NOT_OVER();
 error ZERO_ADDRESS();
 
 contract DumpingBandits is ERC721, ReentrancyGuard {
     using SafeTransferLib for ERC20;
+    using FixedPointMathLib for uint256;
 
     address public owner;
     IRandomnessClient public rc;
@@ -35,6 +38,8 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     // uh yis indeed, dis can be modified by owner butta only applies to ze next round (current round issa not affected)
     uint256 public price = 10 ether;
     uint256 public minDuration = 15 minutes;
+    uint256 public noWinnerProbability = 0.00_0001 ether; // 0.0001%
+    uint256[] public prizes = [0.4 ether, 0.25 ether, 0.15 ether]; // take home 40%, 25%, 15% of ze pot
 
     uint256 public roundStartedAt = 0;
     uint256 public totalParticipants = 0;
@@ -49,6 +54,8 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         uint256 randomness;
         uint256 price;
         uint256 minDuration;
+        uint256 totalWinners;
+        uint256 noWinnerProbability;
         // ze following issa only updated wen ze round issa finalized
         uint256 roundStartedAt;
         uint256 totalParticipants;
@@ -63,13 +70,19 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
-    event OwnerSet(address owner);
-    event RandomnessClientSet(address rc);
-    event PriceSet(uint256 price);
-    event MinDurationSet(uint256 minDuration);
-    event FinalizerRewardSet(uint256 finalizerReward);
+    event SetOwner(address owner);
+    event SetRandomnessClient(address rc);
+    event SetPrice(uint256 price);
+    event SetMinDuration(uint256 minDuration);
+    event SetFinalizerReward(uint256 finalizerReward);
+    event SetTotalWinners(uint256 totalWinners);
+    event SetNoWinnerProbability(uint256 noWinnerProbability);
+    event SetPrizes(uint256[] prizes);
 
-    event RoundStarted(uint256 indexed roundId, uint256 minDuration);
+    event WonPrize(uint256 indexed roundId, address indexed participant, uint256 winnerId, uint256 prizeAmount);
+    event Redistribution(uint256 indexed roundId, address indexed participant, uint256 amount);
+
+    event RoundStarted(uint256 indexed roundId);
     event RoundFinalized(uint256 indexed roundId, uint256 randomness);
 
     event ParticipantAdded(uint256 indexed roundId, address indexed participant, uint256 participantId);
@@ -108,28 +121,39 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
     function setOwner(address _owner) public onlyOwner {
         owner = _owner;
-        emit OwnerSet(_owner);
+        emit SetOwner(_owner);
     }
 
     function setRandomnessClient(address _rc) public onlyOwner {
         if (_rc == address(0)) revert ZERO_ADDRESS();
         rc = IRandomnessClient(_rc);
-        emit RandomnessClientSet(_rc);
+        emit SetRandomnessClient(_rc);
     }
 
     function setPrice(uint256 _price) public onlyOwner {
         price = _price;
-        emit PriceSet(_price);
+        emit SetPrice(_price);
     }
 
     function setMinDuration(uint256 _minDuration) public onlyOwner {
         minDuration = _minDuration;
-        emit MinDurationSet(_minDuration);
+        emit SetMinDuration(_minDuration);
     }
 
     function setFinalizerReward(uint256 _finalizerReward) public onlyOwner {
         finalizerReward = _finalizerReward;
-        emit FinalizerRewardSet(_finalizerReward);
+        emit SetFinalizerReward(_finalizerReward);
+    }
+
+    function setNoWinnerProbability(uint256 _noWinnerProbability) public onlyOwner {
+        noWinnerProbability = _noWinnerProbability;
+        emit SetNoWinnerProbability(_noWinnerProbability);
+    }
+
+    function setPrizes(uint256[] memory _prizes) public onlyOwner {
+        if (_prizes.length == 0) revert ZERO_WINNERS();
+        prizes = _prizes;
+        emit SetPrizes(_prizes);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -147,12 +171,14 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
             randomness: 0,
             price: price,
             minDuration: minDuration,
+            totalWinners: prizes.length,
+            noWinnerProbability: noWinnerProbability,
             roundStartedAt: roundStartedAt,
             totalParticipants: totalParticipants
         });
 
         rounds[roundId] = round;
-        emit RoundStarted(roundId, minDuration);
+        emit RoundStarted(roundId);
     }
 
     function participate() public payable nonReentrant {
@@ -173,25 +199,56 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     function finalizeRound() public onlyRoundOver nonReentrant {
         uint256 randomness = rc.generateRandomness();
-        // TODO: distribute or make claimable the prize
 
-        // transfer finalizer reward to msg.sender and burn the rest
+        // update round struct
+        rounds[roundId].randomness = randomness;
+        rounds[roundId].totalParticipants = totalParticipants;
+
+        // derive winners from randomness
+        uint256[] memory winners = _deriveWinner(randomness);
+        if (winners.length == 0) {
+            _handleRedistribution();
+        } else {
+            _handlePrizes(winners);
+        }
+
+        // transfer finalizer reward to msg.sender then handover ze rest
         payable(msg.sender).transfer(finalizerReward);
-        payable(address(0)).transfer(address(this).balance);
+        _handleLeftOver();
         emit RoundFinalized(roundId, randomness);
     }
 
-    /// @dev Derives a winner from a random number, round id, total participants, and weight (wad) of this winner.
-    /// @dev If we want to skip a winner (eg. the second place is the same as the first place), we can use the _skips parameter.
-    /// @param _totalParticipants The total number of participants in the round.
-    /// @param _weight The weight of the winner (if deriving a prize with 30% chance, the weight is 0.3 ether).
-    /// @param _randomness The random number to derive the winner from.
-    /// @param _skips The number of potential winners to skip before picking the actual winner.
-    function _deriveWinner(uint256 _totalParticipants, uint256 _weight, uint256 _randomness, uint256 _skips)
-        internal
-        view
-        returns (uint256)
-    {
+    function _handlePrizes(uint256[] memory winners) internal {
+        uint256 poolSize = address(this).balance - finalizerReward;
+        for (uint256 i = 0; i < winners.length; i++) {
+            // TODO: add NFT stuff here
+            address winner = idParticipants[roundId][winners[i]];
+            uint256 prizeAmount = poolSize.mulWadDown(prizes[i]);
+
+            payable(winner).transfer(prizeAmount);
+            emit WonPrize(roundId, winner, i, prizeAmount);
+        }
+    }
+
+    function _handleRedistribution() internal {
+        uint256 poolSize = address(this).balance - finalizerReward;
+        uint256 amount = poolSize.divWadDown(totalParticipants * 1e18);
+        for (uint256 i = 1; i <= totalParticipants; i++) {
+            // TODO: add NFT stuff here
+            address participant = idParticipants[roundId][i];
+
+            payable(participant).transfer(amount);
+            emit Redistribution(roundId, participant, amount);
+        }
+    }
+
+    function _handleLeftOver() internal {
+        // TODO: alternative to burning?
+        payable(address(0)).transfer(address(this).balance);
+    }
+
+    // derive winnas froma random numba, based on current game configs
+    function _deriveWinner(uint256 _randomness) internal view returns (uint256[] memory) {
         // TODO: implement
     }
 }
