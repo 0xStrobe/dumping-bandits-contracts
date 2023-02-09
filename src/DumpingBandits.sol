@@ -4,8 +4,8 @@ pragma solidity ^0.8.18;
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
 import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
-import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {ReentrancyGuard} from "solmate/utils/ReentrancyGuard.sol";
+import "solmate/utils/SafeTransferLib.sol";
 import "openzeppelin-contracts/contracts/utils/Strings.sol";
 
 import {IRandomnessClient} from "./interfaces/IRandomnessClient.sol";
@@ -18,7 +18,6 @@ error ROUND_NOT_OVER();
 error ZERO_ADDRESS();
 
 contract DumpingBandits is ERC721, ReentrancyGuard {
-    using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
 
     address public owner;
@@ -213,7 +212,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         }
 
         // transfer finalizer reward to msg.sender then handover ze rest
-        payable(msg.sender).transfer(finalizerReward);
+        SafeTransferLib.safeTransferETH(msg.sender, finalizerReward);
         _handleLeftOver();
         emit RoundFinalized(roundId, randomness);
     }
@@ -225,7 +224,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
             address winner = idParticipants[roundId][winners[i]];
             uint256 prizeAmount = poolSize.mulWadDown(prizes[i]);
 
-            payable(winner).transfer(prizeAmount);
+            SafeTransferLib.safeTransferETH(winner, prizeAmount);
             emit WonPrize(roundId, winner, i, prizeAmount);
         }
     }
@@ -237,14 +236,14 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
             // TODO: add NFT stuff here
             address participant = idParticipants[roundId][i];
 
-            payable(participant).transfer(amount);
+            SafeTransferLib.safeTransferETH(participant, amount);
             emit Redistribution(roundId, participant, amount);
         }
     }
 
     function _handleLeftOver() internal {
         // TODO: alternative to burning?
-        payable(address(0)).transfer(address(this).balance);
+        SafeTransferLib.safeTransferETH(address(0), address(this).balance);
     }
 
     // derive winnas froma random numba, based on current game configs
