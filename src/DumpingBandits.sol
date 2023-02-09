@@ -72,7 +72,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     event RoundStarted(uint256 indexed roundId, uint256 minDuration);
     event RoundFinalized(uint256 indexed roundId, uint256 randomness);
 
-    event ParticipantAdded(uint256 indexed roundId, address indexed participant);
+    event ParticipantAdded(uint256 indexed roundId, address indexed participant, uint256 participantId);
 
     /*//////////////////////////////////////////////////////////////
                         HELPERS CUZ IM LAZYYYYYYYY
