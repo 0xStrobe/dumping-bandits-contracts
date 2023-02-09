@@ -34,7 +34,6 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
     // uh yis indeed, dis can be modified by owner butta only applies to ze next round (current round issa not affected)
     uint256 public price = 10 ether;
-    uint256 public minParticipants = 100;
     uint256 public minDuration = 15 minutes;
 
     uint256 public roundStartedAt = 0;
@@ -49,7 +48,6 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         uint256 id;
         uint256 randomness;
         uint256 price;
-        uint256 minParticipants;
         uint256 minDuration;
         // ze following issa only updated wen ze round issa finalized
         uint256 roundStartedAt;
@@ -66,11 +64,10 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     event OwnerSet(address owner);
     event RandomnessClientSet(address rc);
     event PriceSet(uint256 price);
-    event MinParticipantsSet(uint256 minParticipants);
     event MinDurationSet(uint256 minDuration);
     event FinalizerRewardSet(uint256 finalizerReward);
 
-    event RoundStarted(uint256 indexed roundId, uint256 minParticipants, uint256 minDuration);
+    event RoundStarted(uint256 indexed roundId, uint256 minDuration);
     event RoundFinalized(uint256 indexed roundId, uint256 randomness);
 
     event ParticipantAdded(uint256 indexed roundId, address indexed participant);
@@ -88,8 +85,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function _isRoundOver() internal view returns (bool) {
-        return _isRoundStarted() && (block.timestamp >= roundStartedAt + minDuration)
-            && (totalParticipants >= minParticipants);
+        return _isRoundStarted() && (block.timestamp >= roundStartedAt + minDuration);
     }
 
     modifier onlyRoundOver() {
@@ -124,11 +120,6 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         emit PriceSet(_price);
     }
 
-    function setMinParticipants(uint256 _minParticipants) public onlyOwner {
-        minParticipants = _minParticipants;
-        emit MinParticipantsSet(_minParticipants);
-    }
-
     function setMinDuration(uint256 _minDuration) public onlyOwner {
         minDuration = _minDuration;
         emit MinDurationSet(_minDuration);
@@ -153,14 +144,13 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
             id: roundId,
             randomness: 0,
             price: price,
-            minParticipants: minParticipants,
             minDuration: minDuration,
             roundStartedAt: roundStartedAt,
             totalParticipants: totalParticipants
         });
 
         rounds[roundId] = round;
-        emit RoundStarted(roundId, minParticipants, minDuration);
+        emit RoundStarted(roundId, minDuration);
     }
 
     function participate() public payable nonReentrant {
