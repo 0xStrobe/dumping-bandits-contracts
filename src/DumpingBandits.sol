@@ -56,7 +56,9 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
     mapping(uint256 => Round) public rounds;
-    mapping(uint256 => mapping(address => bool)) public participants;
+    // participant id issa 1-indexed
+    mapping(uint256 => mapping(address => uint256)) public participantIds; // roundId => participant => participantId
+    mapping(uint256 => mapping(uint256 => address)) public idParticipants; // roundId => participantId => participant
 
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
@@ -160,12 +162,13 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         }
 
         // add participant to the current round
-        participants[roundId][msg.sender] = true;
         unchecked {
             totalParticipants++;
         }
+        participantIds[roundId][msg.sender] = totalParticipants;
+        idParticipants[roundId][totalParticipants] = msg.sender;
 
-        emit ParticipantAdded(roundId, msg.sender);
+        emit ParticipantAdded(roundId, msg.sender, totalParticipants);
     }
 
     function finalizeRound() public onlyRoundOver nonReentrant {
