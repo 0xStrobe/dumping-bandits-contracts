@@ -16,6 +16,7 @@ error ZERO_WINNERS();
 error ROUND_NOT_STARTED();
 error ROUND_NOT_OVER();
 error ZERO_ADDRESS();
+error ALREADY_PARTICIPATED();
 
 contract DumpingBandits is ERC721, ReentrancyGuard {
     using FixedPointMathLib for uint256;
@@ -43,7 +44,9 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
                         GAME STATE N HISTORY
     //////////////////////////////////////////////////////////////*/
     struct Round {
+        // game state
         uint256 roundStartedAt;
+        uint256 totalParticipants;
         // game rules
         uint256 price;
         uint256 minDuration;
@@ -51,13 +54,10 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         uint256[] prizes;
         uint256 finalizerReward;
         // only updated wen ze round issa finalized
-        uint256 totalParticipants;
         uint256 randomness;
     }
 
     uint256 public roundId = 0;
-    Round public currentRound;
-    uint256 public currentTotalParticipants = 0;
 
     // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
     mapping(uint256 => Round) public rounds;
@@ -94,11 +94,11 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function _isRoundStarted() internal view returns (bool) {
-        return currentRound.roundStartedAt != 0;
+        return rounds[roundId].roundStartedAt != 0;
     }
 
     function _isRoundOver() internal view returns (bool) {
-        return _isRoundStarted() && (block.timestamp >= currentRound.roundStartedAt + currentRound.minDuration);
+        return _isRoundStarted() && (block.timestamp >= rounds[roundId].roundStartedAt + rounds[roundId].minDuration);
     }
 
     modifier onlyRoundOver() {
@@ -158,20 +158,15 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
                                 GAME LOGIC
     //////////////////////////////////////////////////////////////*/
     function _startRound() internal {
-        unchecked {
-            roundId++;
-        }
-        roundStartedAt = block.timestamp;
-
         Round memory round = Round({
-            id: roundId,
-            randomness: 0,
-            price: price,
-            minDuration: minDuration,
-            totalWinners: prizes.length,
-            noWinnerProbability: noWinnerProbability,
-            roundStartedAt: roundStartedAt,
-            totalParticipants: totalParticipants
+            roundStartedAt: block.timestamp,
+            price: defaultPrice,
+            minDuration: defaultMinDuration,
+            noWinnerProbability: defaultNoWinnerProbability,
+            prizes: defaultPrizes,
+            finalizerReward: defaultFinalizerReward,
+            totalParticipants: 0,
+            randomness: 0
         });
 
         rounds[roundId] = round;
@@ -179,19 +174,21 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function participate() public payable nonReentrant {
-        if (msg.value != price) revert WRONG_PRICE();
+        if (msg.value != rounds[roundId].price) revert WRONG_PRICE();
+        if (participantIds[roundId][msg.sender] != 0) revert ALREADY_PARTICIPATED();
         if (!_isRoundStarted()) {
             _startRound();
         }
 
         // add participant to the current round
         unchecked {
-            totalParticipants++;
+            rounds[roundId].totalParticipants++;
         }
-        participantIds[roundId][msg.sender] = totalParticipants;
-        idParticipants[roundId][totalParticipants] = msg.sender;
+        uint256 participantId = rounds[roundId].totalParticipants;
+        participantIds[roundId][msg.sender] = participantId;
+        idParticipants[roundId][participantId] = msg.sender;
 
-        emit ParticipantAdded(roundId, msg.sender, totalParticipants);
+        emit ParticipantAdded(roundId, msg.sender, participantId);
     }
 
     function finalizeRound() public onlyRoundOver nonReentrant {
@@ -199,10 +196,6 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
         // update round struct
         rounds[roundId].randomness = randomness;
-        rounds[roundId].totalParticipants = totalParticipants;
-        // reset game state
-        roundStartedAt = 0;
-        totalParticipants = 0;
 
         // derive winners from randomness
         uint256[] memory winners = _deriveWinner(randomness);
@@ -213,17 +206,22 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         }
 
         // transfer finalizer reward to msg.sender then handover ze rest
-        SafeTransferLib.safeTransferETH(msg.sender, finalizerReward);
+        SafeTransferLib.safeTransferETH(msg.sender, rounds[roundId].finalizerReward);
         _handleLeftOver();
         emit RoundFinalized(roundId, randomness);
+
+        // move on to ze next round (but issa not started yet)
+        unchecked {
+            roundId++;
+        }
     }
 
     function _handlePrizes(uint256[] memory winners) internal {
-        uint256 poolSize = address(this).balance - finalizerReward;
+        uint256 poolSize = address(this).balance - rounds[roundId].finalizerReward;
         for (uint256 i = 0; i < winners.length; i++) {
             // TODO: add NFT stuff here
             address winner = idParticipants[roundId][winners[i]];
-            uint256 prizeAmount = poolSize.mulWadDown(prizes[i]);
+            uint256 prizeAmount = poolSize.mulWadDown(rounds[roundId].prizes[i]);
 
             SafeTransferLib.safeTransferETH(winner, prizeAmount);
             emit WonPrize(roundId, winner, i, prizeAmount);
@@ -231,9 +229,9 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function _handleRedistribution() internal {
-        uint256 poolSize = address(this).balance - finalizerReward;
-        uint256 amount = poolSize.divWadDown(totalParticipants * 1e18);
-        for (uint256 i = 1; i <= totalParticipants; i++) {
+        uint256 poolSize = address(this).balance - rounds[roundId].finalizerReward;
+        uint256 amount = poolSize.divWadDown(rounds[roundId].totalParticipants * 1e18);
+        for (uint256 i = 1; i <= rounds[roundId].totalParticipants; i++) {
             // TODO: add NFT stuff here
             address participant = idParticipants[roundId][i];
 
