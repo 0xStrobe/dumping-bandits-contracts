@@ -248,15 +248,18 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     // derive winnas froma random numba, based on current game configs
     function _deriveWinner(uint256 _randomness) internal view returns (uint256[] memory) {
         // if no winner, return empty array
-        if (_randomness % (1e18) < noWinnerProbability) {
+        if (_randomness % (1e18) < rounds[roundId].noWinnerProbability) {
             return new uint256[](0);
         }
 
-        uint256[] memory winners = new uint256[](prizes.length);
+        uint256 prizesCount = rounds[roundId].prizes.length;
+        uint256 totalParticipants = rounds[roundId].totalParticipants;
+
+        uint256[] memory winners = new uint256[](prizesCount);
         uint256 winnerCount = 0;
 
         // else, derive winners
-        for (uint256 i = 0; i < prizes.length; i++) {
+        for (uint256 i = 0; i < prizesCount; i++) {
             uint256 winnerId = _randomness % totalParticipants + 1;
             winners[i] = winnerId;
             winnerCount++;
