@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
-import {IRandomness} from "./interfaces/IRandomness.sol";
+import {IRandomnessClient} from "./interfaces/IRandomnessClient.sol";
 
-contract Randomness is IRandomness {
+contract RandomnessClient is IRandomnessClient {
     function generateRandomness() external view returns (uint256) {
         return uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, block.coinbase, block.number)));
     }
