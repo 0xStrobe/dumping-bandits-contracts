@@ -29,40 +29,39 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         rc = IRandomnessClient(_rc);
     }
 
-    uint256 public roundId = 0;
-
     /*//////////////////////////////////////////////////////////////
-                                GAME RULES
+                            DEFAULT RULES
     //////////////////////////////////////////////////////////////*/
     // uh yis indeed, dis can be modified by owner butta only applies to ze next round (current round issa not affected)
-    uint256 public price = 10 ether;
-    uint256 public minDuration = 15 minutes;
-    uint256 public noWinnerProbability = 0.00_0001 ether; // 0.0001%
-    uint256[] public prizes = [0.4 ether, 0.25 ether, 0.15 ether]; // take home 40%, 25%, 15% of ze pot
-
-    uint256 public roundStartedAt = 0;
-    uint256 public totalParticipants = 0;
-
-    uint256 public finalizerReward = 10 ether;
+    uint256 public defaultPrice = 10 ether;
+    uint256 public defaultMinDuration = 15 minutes;
+    uint256 public defaultNoWinnerProbability = 0.00_0001 ether; // 0.0001%
+    uint256[] public defaultPrizes = [0.4 ether, 0.25 ether, 0.15 ether]; // take home 40%, 25%, 15% of ze pot
+    uint256 public defaultFinalizerReward = 10 ether;
 
     /*//////////////////////////////////////////////////////////////
-                            HISTORYYYYYYYYY
+                        GAME STATE N HISTORY
     //////////////////////////////////////////////////////////////*/
     struct Round {
-        uint256 id;
-        uint256 randomness;
+        uint256 roundStartedAt;
+        // game rules
         uint256 price;
         uint256 minDuration;
-        uint256 totalWinners;
         uint256 noWinnerProbability;
-        // ze following issa only updated wen ze round issa finalized
-        uint256 roundStartedAt;
+        uint256[] prizes;
+        uint256 finalizerReward;
+        // only updated wen ze round issa finalized
         uint256 totalParticipants;
+        uint256 randomness;
     }
+
+    uint256 public roundId = 0;
+    Round public currentRound;
+    uint256 public currentTotalParticipants = 0;
 
     // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
     mapping(uint256 => Round) public rounds;
-    // participant id issa 1-indexed
+    // participant id issa 1-indexed (cuz 0 is same as false)
     mapping(uint256 => mapping(address => uint256)) public participantIds; // roundId => participant => participantId
     mapping(uint256 => mapping(uint256 => address)) public idParticipants; // roundId => participantId => participant
 
@@ -71,14 +70,14 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
     event SetOwner(address owner);
     event SetRandomnessClient(address rc);
+
     event SetPrice(uint256 price);
     event SetMinDuration(uint256 minDuration);
-    event SetFinalizerReward(uint256 finalizerReward);
-    event SetTotalWinners(uint256 totalWinners);
     event SetNoWinnerProbability(uint256 noWinnerProbability);
     event SetPrizes(uint256[] prizes);
+    event SetFinalizerReward(uint256 finalizerReward);
 
-    event WonPrize(uint256 indexed roundId, address indexed participant, uint256 winnerId, uint256 prizeAmount);
+    event WonPrize(uint256 indexed roundId, address indexed participant, uint256 prizeId, uint256 prizeAmount);
     event Redistribution(uint256 indexed roundId, address indexed participant, uint256 amount);
 
     event RoundStarted(uint256 indexed roundId);
@@ -95,11 +94,11 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function _isRoundStarted() internal view returns (bool) {
-        return roundStartedAt != 0;
+        return currentRound.roundStartedAt != 0;
     }
 
     function _isRoundOver() internal view returns (bool) {
-        return _isRoundStarted() && (block.timestamp >= roundStartedAt + minDuration);
+        return _isRoundStarted() && (block.timestamp >= currentRound.roundStartedAt + currentRound.minDuration);
     }
 
     modifier onlyRoundOver() {
@@ -130,29 +129,29 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function setPrice(uint256 _price) public onlyOwner {
-        price = _price;
+        defaultPrice = _price;
         emit SetPrice(_price);
     }
 
     function setMinDuration(uint256 _minDuration) public onlyOwner {
-        minDuration = _minDuration;
+        defaultMinDuration = _minDuration;
         emit SetMinDuration(_minDuration);
     }
 
-    function setFinalizerReward(uint256 _finalizerReward) public onlyOwner {
-        finalizerReward = _finalizerReward;
-        emit SetFinalizerReward(_finalizerReward);
-    }
-
     function setNoWinnerProbability(uint256 _noWinnerProbability) public onlyOwner {
-        noWinnerProbability = _noWinnerProbability;
+        defaultNoWinnerProbability = _noWinnerProbability;
         emit SetNoWinnerProbability(_noWinnerProbability);
     }
 
     function setPrizes(uint256[] memory _prizes) public onlyOwner {
         if (_prizes.length == 0) revert ZERO_WINNERS();
-        prizes = _prizes;
+        defaultPrizes = _prizes;
         emit SetPrizes(_prizes);
+    }
+
+    function setFinalizerReward(uint256 _finalizerReward) public onlyOwner {
+        defaultFinalizerReward = _finalizerReward;
+        emit SetFinalizerReward(_finalizerReward);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -162,7 +161,6 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         unchecked {
             roundId++;
         }
-        totalParticipants = 0;
         roundStartedAt = block.timestamp;
 
         Round memory round = Round({
@@ -202,6 +200,9 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         // update round struct
         rounds[roundId].randomness = randomness;
         rounds[roundId].totalParticipants = totalParticipants;
+        // reset game state
+        roundStartedAt = 0;
+        totalParticipants = 0;
 
         // derive winners from randomness
         uint256[] memory winners = _deriveWinner(randomness);
