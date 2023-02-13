@@ -13,11 +13,12 @@ import {IRandomnessClient} from "./interfaces/IRandomnessClient.sol";
 error NOT_OWNER();
 error WRONG_PRICE();
 error ZERO_WINNERS();
-error ROUND_NOT_STARTED();
-error ROUND_NOT_OVER();
+error NOT_STARTED_YET();
+error CANT_FINALIZE_YET();
 error ZERO_ADDRESS();
 error ALREADY_PARTICIPATED();
-error TOO_MANY_PARTICIPANTS();
+error TOO_MANY();
+error TOO_MANY_PRIZES();
 
 contract DumpingBandits is ERC721, ReentrancyGuard {
     using FixedPointMathLib for uint256;
@@ -61,6 +62,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     uint256 public roundId = 0;
+    uint256 public nextTokenId = 0;
 
     // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
     mapping(uint256 => Round) public rounds;
@@ -101,12 +103,12 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         return rounds[roundId].roundStartedAt != 0;
     }
 
-    function _isRoundOver() internal view returns (bool) {
+    function _canFinalize() internal view returns (bool) {
         return _isRoundStarted() && (block.timestamp >= rounds[roundId].roundStartedAt + rounds[roundId].minDuration);
     }
 
-    modifier onlyRoundOver() {
-        if (!_isRoundOver()) revert ROUND_NOT_OVER();
+    modifier onlyCanFinalize() {
+        if (!_canFinalize()) revert CANT_FINALIZE_YET();
         _;
     }
 
@@ -114,8 +116,49 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
                                 NFT STUFF
     //////////////////////////////////////////////////////////////*/
     function tokenURI(uint256 id) public pure override returns (string memory) {
-        // TODO: implement traits n stuff
+        // TODO: fix all 1-index and 0-index stuff. all ids should be 1-indexed except for token id cuz we use 0 for false
         return string(abi.encodePacked("https://dumpingbandits.canto.life/nft/", Strings.toString(id)));
+    }
+
+    /// @notice Returns the game info of the round this token was issued in
+    /// @param _tokenId The id of the ticket, which is the same as the id of the NFT
+    /// @return _roundId The id of the round this token was issued in
+    /// @return _participantId The id of the participant this token was issued to in that round
+    function lookupId(uint256 _tokenId) public view returns (uint256, uint256) {
+        uint256 participantsSoFar = 0;
+        uint256 roundIdSoFar = 0;
+        while (participantsSoFar < _tokenId) {
+            unchecked {
+                participantsSoFar += rounds[roundIdSoFar].totalParticipants;
+                roundIdSoFar++;
+            }
+        }
+        return (roundIdSoFar - 1, _tokenId + rounds[roundIdSoFar - 1].totalParticipants - participantsSoFar);
+    }
+
+    /// @notice Returns the prize info of the token, used to format the NFT resources
+    /// @param _tokenId The id of the ticket, which is the same as the id of the NFT
+    /// @return _prizeId The id of the prize in the prizes list of that round
+    /// @return _prizePercentage The percentage of the prize from the pool
+    /// @return _prizeAmount The token amount of the prize
+    /// @return _isWojak Whether the prize is a wojak
+    function lookupPrize(uint256 _tokenId) public view returns (uint256, uint256, uint256, bool) {
+        (uint256 _roundId, uint256 _participantId) = lookupId(_tokenId);
+        Round memory _round = rounds[_roundId];
+        uint256[] memory winners = _deriveWinner(_round.randomness);
+        uint256 prizeId = 0;
+        for (uint256 i = 0; i < winners.length; i++) {
+            if (winners[i] == _participantId) {
+                prizeId = i + 1;
+                break;
+            }
+        }
+        if (prizeId == 0) {
+            return (0, 0, 0, true);
+        }
+        uint256 prizePercentage = _round.prizes[prizeId - 1];
+        uint256 prizeAmount = _round.price.mulWadDown(prizePercentage);
+        return (prizeId, prizePercentage, prizeAmount, false);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -149,6 +192,14 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     function setPrizes(uint256[] memory _prizes) public onlyOwner {
         if (_prizes.length == 0) revert ZERO_WINNERS();
+        if (_prizes.length >= type(uint32).max) revert TOO_MANY();
+        uint256 totalPrizes = 0;
+        for (uint256 i = 0; i < _prizes.length; i++) {
+            totalPrizes += _prizes[i];
+        }
+        if (totalPrizes + defaultFinalizerReward + defaultRedistributionReserve > 1 ether) {
+            revert TOO_MANY_PRIZES();
+        }
         defaultPrizes = _prizes;
         emit SetPrizes(_prizes);
     }
@@ -186,14 +237,17 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     function participate() public payable nonReentrant {
         if (msg.value != rounds[roundId].price) revert WRONG_PRICE();
         if (participantIds[roundId][msg.sender] != 0) revert ALREADY_PARTICIPATED();
-        if (rounds[roundId].totalParticipants == type(uint32).max) revert TOO_MANY_PARTICIPANTS();
+        if (rounds[roundId].totalParticipants == type(uint32).max) revert TOO_MANY();
         if (!_isRoundStarted()) {
             _startRound();
         }
 
+        // mint NFT
+        _safeMint(msg.sender, nextTokenId);
         // add participant to the current round
         unchecked {
             rounds[roundId].totalParticipants++;
+            nextTokenId++;
         }
         uint256 participantId = rounds[roundId].totalParticipants;
         participantIds[roundId][msg.sender] = participantId;
@@ -202,7 +256,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         emit ParticipantAdded(roundId, msg.sender, participantId);
     }
 
-    function finalizeRound() public onlyRoundOver nonReentrant {
+    function finalizeRound() public onlyCanFinalize nonReentrant {
         uint256 randomness = rc.getRandomness();
 
         // update round struct
@@ -230,7 +284,6 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     function _handlePrizes(uint256[] memory winners) internal {
         uint256 poolSize = address(this).balance - rounds[roundId].finalizerReward;
         for (uint256 i = 0; i < winners.length; i++) {
-            // TODO: add NFT stuff here
             address winner = idParticipants[roundId][winners[i]];
             uint256 prizeAmount = poolSize.mulWadDown(rounds[roundId].prizes[i]);
 
@@ -245,7 +298,6 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         uint256 poolSize = price.mulWadDown(totalParticipants * 1e18) - rounds[roundId].finalizerReward;
         uint256 amount = poolSize.divWadDown(totalParticipants * 1e18);
         for (uint256 i = 1; i <= totalParticipants; i++) {
-            // TODO: add NFT stuff here
             address participant = idParticipants[roundId][i];
 
             SafeTransferLib.safeTransferETH(participant, amount);
