@@ -201,7 +201,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function finalizeRound() public onlyRoundOver nonReentrant {
-        uint256 randomness = rc.generateRandomness();
+        uint256 randomness = rc.getRandomness();
 
         // update round struct
         rounds[roundId].randomness = randomness;
