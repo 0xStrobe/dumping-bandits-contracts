@@ -17,6 +17,7 @@ error ROUND_NOT_STARTED();
 error ROUND_NOT_OVER();
 error ZERO_ADDRESS();
 error ALREADY_PARTICIPATED();
+error TOO_MANY_PARTICIPANTS();
 
 contract DumpingBandits is ERC721, ReentrancyGuard {
     using FixedPointMathLib for uint256;
@@ -185,6 +186,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     function participate() public payable nonReentrant {
         if (msg.value != rounds[roundId].price) revert WRONG_PRICE();
         if (participantIds[roundId][msg.sender] != 0) revert ALREADY_PARTICIPATED();
+        if (rounds[roundId].totalParticipants == type(uint32).max) revert TOO_MANY_PARTICIPANTS();
         if (!_isRoundStarted()) {
             _startRound();
         }
@@ -265,26 +267,47 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
             return new uint256[](0);
         }
 
+        // else, derive winners
         uint256 prizesCount = rounds[roundId].prizes.length;
         uint256 totalParticipants = rounds[roundId].totalParticipants;
 
-        uint256[] memory winners = new uint256[](prizesCount);
-        uint256 winnerCount = 0;
-
-        // else, derive winners
-        for (uint256 i = 0; i < prizesCount; i++) {
-            uint256 winnerId = _randomness % totalParticipants + 1;
-            winners[i] = winnerId;
-            winnerCount++;
-            _randomness = _randomness / totalParticipants;
-            // if _randomness gets too short, hash it again
-            if (_randomness < 1e8) {
-                _randomness = uint256(keccak256(abi.encodePacked(_randomness, block.timestamp)));
-            }
-
-            // TODO: dedupe
-        }
+        uint256[] memory winners = _rng(_randomness, uint32(totalParticipants), uint32(prizesCount));
 
         return winners;
+    }
+
+    function _lcg(uint256 _seed) internal pure returns (uint32) {
+        // operate on 48bit at each iterashun but returns only ze 32 most significant bits (betta statistico distro)
+        uint256 a = 25214903917;
+        uint256 c = 11;
+        uint256 m = 281474976710656; // 2^48
+        return uint32((a * _seed + c) % m >> 16);
+    }
+
+    /// generate `_count` random numbers between 1 and _max (inclusive) without duplicates
+    function _rng(uint256 _seed, uint32 _max, uint32 _count) internal pure returns (uint256[] memory) {
+        uint256[] memory results = new uint256[](_count);
+        uint256 currentSeed = _seed;
+        uint256 i = 0;
+
+        while (i < _count) {
+            currentSeed = _lcg(currentSeed);
+            uint256 randomNumber = currentSeed % _max + 1;
+
+            bool unique = true;
+            for (uint256 j = 0; j < i; j++) {
+                if (results[j] == randomNumber) {
+                    unique = false;
+                    break;
+                }
+            }
+
+            if (unique) {
+                results[i] = randomNumber;
+                i++;
+            }
+        }
+
+        return results;
     }
 }
