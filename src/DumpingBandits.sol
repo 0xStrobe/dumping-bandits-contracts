@@ -39,6 +39,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     uint256 public defaultNoWinnerProbability = 0.00_0001 ether; // 0.0001%
     uint256[] public defaultPrizes = [0.4 ether, 0.25 ether, 0.15 ether]; // take home 40%, 25%, 15% of ze pot
     uint256 public defaultFinalizerReward = 10 ether;
+    uint256 public defaultRedistributionReserve = 0.02 ether; // keep 2% of per round in contract for redistribution
 
     /*//////////////////////////////////////////////////////////////
                         GAME STATE N HISTORY
@@ -53,6 +54,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         uint256 noWinnerProbability;
         uint256[] prizes;
         uint256 finalizerReward;
+        uint256 redistributionReserve;
         // only updated wen ze round issa finalized
         uint256 randomness;
     }
@@ -76,6 +78,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     event SetNoWinnerProbability(uint256 noWinnerProbability);
     event SetPrizes(uint256[] prizes);
     event SetFinalizerReward(uint256 finalizerReward);
+    event SetRedistributionReserve(uint256 redistributionReserve);
 
     event WonPrize(uint256 indexed roundId, address indexed participant, uint256 prizeId, uint256 prizeAmount);
     event Redistribution(uint256 indexed roundId, address indexed participant, uint256 amount);
@@ -154,6 +157,11 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         emit SetFinalizerReward(_finalizerReward);
     }
 
+    function setRedistributionReserve(uint256 _redistributionReserve) public onlyOwner {
+        defaultRedistributionReserve = _redistributionReserve;
+        emit SetRedistributionReserve(_redistributionReserve);
+    }
+
     /*//////////////////////////////////////////////////////////////
                                 GAME LOGIC
     //////////////////////////////////////////////////////////////*/
@@ -165,6 +173,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
             noWinnerProbability: defaultNoWinnerProbability,
             prizes: defaultPrizes,
             finalizerReward: defaultFinalizerReward,
+            redistributionReserve: defaultRedistributionReserve,
             totalParticipants: 0,
             randomness: 0
         });
@@ -229,9 +238,11 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function _handleRedistribution() internal {
-        uint256 poolSize = address(this).balance - rounds[roundId].finalizerReward;
-        uint256 amount = poolSize.divWadDown(rounds[roundId].totalParticipants * 1e18);
-        for (uint256 i = 1; i <= rounds[roundId].totalParticipants; i++) {
+        uint256 totalParticipants = rounds[roundId].totalParticipants;
+        uint256 price = rounds[roundId].price;
+        uint256 poolSize = price.mulWadDown(totalParticipants * 1e18) - rounds[roundId].finalizerReward;
+        uint256 amount = poolSize.divWadDown(totalParticipants * 1e18);
+        for (uint256 i = 1; i <= totalParticipants; i++) {
             // TODO: add NFT stuff here
             address participant = idParticipants[roundId][i];
 
@@ -242,7 +253,9 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     function _handleLeftOver() internal {
         // TODO: alternative to burning?
-        SafeTransferLib.safeTransferETH(address(0), address(this).balance);
+        uint256 redistributionReserve = rounds[roundId].redistributionReserve.mulWadDown(address(this).balance);
+        uint256 leftOver = address(this).balance - redistributionReserve;
+        SafeTransferLib.safeTransferETH(address(0), leftOver);
     }
 
     // derive winnas froma random numba, based on current game configs
