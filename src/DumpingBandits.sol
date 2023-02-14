@@ -70,6 +70,10 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     mapping(uint256 => mapping(address => uint256)) public participantIds; // roundId => participant => participantId
     mapping(uint256 => mapping(uint256 => address)) public idParticipants; // roundId => participantId => participant
 
+    function currentRound() public view returns (Round memory) {
+        return rounds[roundId];
+    }
+
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
