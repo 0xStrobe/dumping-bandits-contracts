@@ -3,12 +3,13 @@ pragma solidity ^0.8.18;
 
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import "solmate/utils/SafeTransferLib.sol";
+import {IBanditTreasury} from "./interfaces/IBanditTreasury.sol";
 
 error NOT_MANAGER();
 error NOT_WITHDRAWER();
 error ZERO_ADDRESS();
 
-contract BanditsTreasury {
+contract BanditTreasury is IBanditTreasury {
     address public manager;
     mapping(address => bool) public withdrawers;
 
