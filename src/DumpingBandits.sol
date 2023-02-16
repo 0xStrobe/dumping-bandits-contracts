@@ -9,6 +9,7 @@ import "solmate/utils/SafeTransferLib.sol";
 import "openzeppelin-contracts/contracts/utils/Strings.sol";
 
 import {IRandomnessClient} from "./interfaces/IRandomnessClient.sol";
+import {IBanditTreasury} from "./interfaces/IBanditTreasury.sol";
 
 error NOT_OWNER();
 error WRONG_PRICE();
@@ -25,53 +26,62 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     address public owner;
     IRandomnessClient public rc;
+    IBanditTreasury public treasury;
 
-    constructor(address _rc) ERC721("Dumping Bandits", "BANDIT") {
-        if (_rc == address(0)) revert ZERO_ADDRESS();
+    constructor(address _rc, address _treasury) ERC721("Dumping Bandits", "BANDIT") {
+        if (_rc == address(0) || _treasury == address(0)) revert ZERO_ADDRESS();
         owner = msg.sender;
+        emit SetOwner(owner);
+
         rc = IRandomnessClient(_rc);
+        emit SetRandomnessClient(address(rc));
+
+        treasury = IBanditTreasury(_treasury);
+        emit SetTreasury(address(treasury));
     }
 
     /*//////////////////////////////////////////////////////////////
-                            DEFAULT RULES
+                                GAME RULES
     //////////////////////////////////////////////////////////////*/
-    // uh yis indeed, dis can be modified by owner butta only applies to ze next round (current round issa not affected)
-    uint256 public defaultPrice = 10 ether;
-    uint256 public defaultMinDuration = 15 minutes;
-    uint256 public defaultNoWinnerProbability = 0.00_0001 ether; // 0.0001%
-    uint256[] public defaultPrizes = [0.4 ether, 0.25 ether, 0.15 ether]; // take home 40%, 25%, 15% of ze pot
-    uint256 public defaultFinalizerReward = 10 ether;
-    uint256 public defaultRedistributionReserve = 0.02 ether; // keep 2% of per round in contract for redistribution
+    uint256 public price = 10 ether;
+    uint256 public minDuration = 15 minutes;
+    uint256 public everyoneWinsProbability = 0.00_0001 ether; // 0.0001%
+    uint256[] public prizes = [0.4 ether, 0.25 ether, 0.15 ether]; // take home 40%, 25%, 15% of ze pot
+    uint256 public finalizerReward = 10 ether;
+    uint256 public treasuryReserve = 0.2 ether; // send 20% per round to ze treasury as house monies
 
     /*//////////////////////////////////////////////////////////////
-                        GAME STATE N HISTORY
+                                GAME STATE
     //////////////////////////////////////////////////////////////*/
-    struct Round {
-        // game state
-        uint256 roundStartedAt;
-        uint256 totalParticipants;
-        // game rules
-        uint256 price;
-        uint256 minDuration;
-        uint256 noWinnerProbability;
-        uint256[] prizes;
-        uint256 finalizerReward;
-        uint256 redistributionReserve;
-        // only updated wen ze round issa finalized
-        uint256 randomness;
-    }
+    uint256 public roundStartedAt = 0;
+    uint256 public roundParticipants = 0;
 
     uint256 public roundId = 0;
-    uint256 public nextTokenId = 0;
+    uint256 public lastRoundLastTokenId = 0;
+
+    /*//////////////////////////////////////////////////////////////
+                                GAME HISTORY
+    //////////////////////////////////////////////////////////////*/
+    struct Round {
+        address[] winners;
+        uint256 randomness;
+        uint256 participants;
+    }
 
     // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
-    mapping(uint256 => Round) public rounds;
-    // participant id issa 1-indexed (cuz 0 is same as false)
-    mapping(uint256 => mapping(address => uint256)) public participantIds; // roundId => participant => participantId
-    mapping(uint256 => mapping(uint256 => address)) public idParticipants; // roundId => participantId => participant
+    mapping(uint256 => Round) public rounds; // roundId => Round
+    mapping(uint256 => uint256) public tokenIdRound; // tokenId => roundId
 
-    function currentRound() public view returns (Round memory) {
-        return rounds[roundId];
+    function prizeRank(uint256 _tokenId) public view returns (uint256) {
+        uint256 _roundId = tokenIdRound[_tokenId];
+        Round storage round = rounds[_roundId];
+        bool everyoneWins = (round.randomness % 1 ether <= everyoneWinsProbability);
+        if (everyoneWins) return type(uint256).max;
+
+        for (uint256 i = 1; i < round.winners.length; i++) {
+            if (round.winners[i] == ownerOf(_tokenId)) return i + 1;
+        }
+        return 0;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -79,13 +89,14 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
     event SetOwner(address owner);
     event SetRandomnessClient(address rc);
+    event SetTreasury(address treasury);
 
     event SetPrice(uint256 price);
     event SetMinDuration(uint256 minDuration);
-    event SetNoWinnerProbability(uint256 noWinnerProbability);
+    event SetEveryoneWinsProbability(uint256 everyoneWinsProbability);
     event SetPrizes(uint256[] prizes);
     event SetFinalizerReward(uint256 finalizerReward);
-    event SetRedistributionReserve(uint256 redistributionReserve);
+    event SetTreasuryReserve(uint256 treasuryReserve);
 
     event WonPrize(uint256 indexed roundId, address indexed participant, uint256 prizeId, uint256 prizeAmount);
     event Redistribution(uint256 indexed roundId, address indexed participant, uint256 amount);
@@ -104,11 +115,11 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function _isRoundStarted() internal view returns (bool) {
-        return rounds[roundId].roundStartedAt != 0;
+        return roundStartedAt != 0;
     }
 
     function _canFinalize() internal view returns (bool) {
-        return _isRoundStarted() && (block.timestamp >= rounds[roundId].roundStartedAt + rounds[roundId].minDuration);
+        return _isRoundStarted() && (block.timestamp >= roundStartedAt + minDuration);
     }
 
     modifier onlyCanFinalize() {
@@ -119,50 +130,32 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     /*//////////////////////////////////////////////////////////////
                                 NFT STUFF
     //////////////////////////////////////////////////////////////*/
-    function tokenURI(uint256 id) public pure override returns (string memory) {
-        // TODO: fix all 1-index and 0-index stuff. all ids should be 1-indexed except for token id cuz we use 0 for false
-        return string(abi.encodePacked("https://dumpingbandits.canto.life/nft/", Strings.toString(id)));
+    function tokenURI(uint256 _tokenId) public pure override returns (string memory) {
+        return string(abi.encodePacked("https://dumpingbandits.canto.life/nft/", Strings.toString(_tokenId)));
     }
 
-    /// @notice Returns the game info of the round this token was issued in
-    /// @param _tokenId The id of the ticket, which is the same as the id of the NFT
-    /// @return _roundId The id of the round this token was issued in
-    /// @return _participantId The id of the participant this token was issued to in that round
-    function lookupId(uint256 _tokenId) public view returns (uint256, uint256) {
-        uint256 participantsSoFar = 0;
-        uint256 roundIdSoFar = 0;
-        while (participantsSoFar < _tokenId) {
-            unchecked {
-                participantsSoFar += rounds[roundIdSoFar].totalParticipants;
-                roundIdSoFar++;
-            }
-        }
-        return (roundIdSoFar - 1, _tokenId + rounds[roundIdSoFar - 1].totalParticipants - participantsSoFar);
-    }
+    function tokenInfo(uint256 _tokenId) public view returns (string memory) {
+        uint256 _roundId = tokenIdRound[_tokenId];
+        Round storage round = rounds[_roundId];
+        uint256 _totalWinners = round.winners.length;
+        uint256 _prizeRank = prizeRank(_tokenId);
 
-    /// @notice Returns the prize info of the token, used to format the NFT resources
-    /// @param _tokenId The id of the ticket, which is the same as the id of the NFT
-    /// @return _prizeId The id of the prize in the prizes list of that round
-    /// @return _prizePercentage The percentage of the prize from the pool
-    /// @return _prizeAmount The token amount of the prize
-    /// @return _isWojak Whether the prize is a wojak
-    function lookupPrize(uint256 _tokenId) public view returns (uint256, uint256, uint256, bool) {
-        (uint256 _roundId, uint256 _participantId) = lookupId(_tokenId);
-        Round memory _round = rounds[_roundId];
-        uint256[] memory winners = _deriveWinner(_round.randomness);
-        uint256 prizeId = 0;
-        for (uint256 i = 0; i < winners.length; i++) {
-            if (winners[i] == _participantId) {
-                prizeId = i + 1;
-                break;
-            }
+        if (_prizeRank != type(uint256).max) {
+            return string(abi.encodePacked("Round ", Strings.toString(_roundId), " - Everyone wins!"));
+        } else if (_prizeRank == 0) {
+            return string(abi.encodePacked("Round ", Strings.toString(_roundId), " - Did not win."));
+        } else {
+            return string(
+                abi.encodePacked(
+                    "Round ",
+                    Strings.toString(_roundId),
+                    " - ",
+                    Strings.toString(_prizeRank),
+                    "/",
+                    Strings.toString(_totalWinners)
+                )
+            );
         }
-        if (prizeId == 0) {
-            return (0, 0, 0, true);
-        }
-        uint256 prizePercentage = _round.prizes[prizeId - 1];
-        uint256 prizeAmount = _round.price.mulWadDown(prizePercentage);
-        return (prizeId, prizePercentage, prizeAmount, false);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -176,22 +169,28 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     function setRandomnessClient(address _rc) public onlyOwner {
         if (_rc == address(0)) revert ZERO_ADDRESS();
         rc = IRandomnessClient(_rc);
-        emit SetRandomnessClient(_rc);
+        emit SetRandomnessClient(address(rc));
+    }
+
+    function setTreasury(address _treasury) public onlyOwner {
+        if (_treasury == address(0)) revert ZERO_ADDRESS();
+        treasury = IBanditTreasury(_treasury);
+        emit SetTreasury(address(treasury));
     }
 
     function setPrice(uint256 _price) public onlyOwner {
-        defaultPrice = _price;
-        emit SetPrice(_price);
+        price = _price;
+        emit SetPrice(price);
     }
 
     function setMinDuration(uint256 _minDuration) public onlyOwner {
-        defaultMinDuration = _minDuration;
-        emit SetMinDuration(_minDuration);
+        minDuration = _minDuration;
+        emit SetMinDuration(minDuration);
     }
 
-    function setNoWinnerProbability(uint256 _noWinnerProbability) public onlyOwner {
-        defaultNoWinnerProbability = _noWinnerProbability;
-        emit SetNoWinnerProbability(_noWinnerProbability);
+    function setEveryoneWinsProbability(uint256 _everyoneWinsProbability) public onlyOwner {
+        everyoneWinsProbability = _everyoneWinsProbability;
+        emit SetEveryoneWinsProbability(everyoneWinsProbability);
     }
 
     function setPrizes(uint256[] memory _prizes) public onlyOwner {
@@ -201,73 +200,57 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         for (uint256 i = 0; i < _prizes.length; i++) {
             totalPrizes += _prizes[i];
         }
-        if (totalPrizes + defaultFinalizerReward + defaultRedistributionReserve > 1 ether) {
+        if (totalPrizes + treasuryReserve > 1 ether) {
             revert TOO_MANY_PRIZES();
         }
-        defaultPrizes = _prizes;
-        emit SetPrizes(_prizes);
+        prizes = _prizes;
+        emit SetPrizes(prizes);
     }
 
     function setFinalizerReward(uint256 _finalizerReward) public onlyOwner {
-        defaultFinalizerReward = _finalizerReward;
-        emit SetFinalizerReward(_finalizerReward);
+        finalizerReward = _finalizerReward;
+        emit SetFinalizerReward(finalizerReward);
     }
 
-    function setRedistributionReserve(uint256 _redistributionReserve) public onlyOwner {
-        defaultRedistributionReserve = _redistributionReserve;
-        emit SetRedistributionReserve(_redistributionReserve);
+    function setTreasuryReserve(uint256 _treasuryReserve) public onlyOwner {
+        treasuryReserve = _treasuryReserve;
+        emit SetTreasuryReserve(_treasuryReserve);
     }
 
     /*//////////////////////////////////////////////////////////////
                                 GAME LOGIC
     //////////////////////////////////////////////////////////////*/
     function _startRound() internal {
-        Round memory round = Round({
-            roundStartedAt: block.timestamp,
-            price: defaultPrice,
-            minDuration: defaultMinDuration,
-            noWinnerProbability: defaultNoWinnerProbability,
-            prizes: defaultPrizes,
-            finalizerReward: defaultFinalizerReward,
-            redistributionReserve: defaultRedistributionReserve,
-            totalParticipants: 0,
-            randomness: 0
-        });
+        roundId++;
+        lastRoundLastTokenId = lastRoundLastTokenId + roundParticipants;
 
-        rounds[roundId] = round;
+        roundStartedAt = block.timestamp;
+        roundParticipants = 0;
+
         emit RoundStarted(roundId);
     }
 
     function participate() public payable nonReentrant {
-        if (msg.value != rounds[roundId].price) revert WRONG_PRICE();
-        if (participantIds[roundId][msg.sender] != 0) revert ALREADY_PARTICIPATED();
-        if (rounds[roundId].totalParticipants == type(uint32).max) revert TOO_MANY();
+        if (msg.value != price) revert WRONG_PRICE();
         if (!_isRoundStarted()) {
             _startRound();
         }
 
-        // mint NFT
-        _safeMint(msg.sender, nextTokenId);
-        // add participant to the current round
-        unchecked {
-            rounds[roundId].totalParticipants++;
-            nextTokenId++;
-        }
-        uint256 participantId = rounds[roundId].totalParticipants;
-        participantIds[roundId][msg.sender] = participantId;
-        idParticipants[roundId][participantId] = msg.sender;
+        roundParticipants++;
+        uint256 thisTokenId = lastRoundLastTokenId + roundParticipants;
+        tokenIdRound[thisTokenId] = roundId;
+        _safeMint(msg.sender, thisTokenId);
 
-        emit ParticipantAdded(roundId, msg.sender, participantId);
+        emit ParticipantAdded(roundId, msg.sender, thisTokenId);
     }
 
     function finalizeRound() public onlyCanFinalize nonReentrant {
         uint256 randomness = rc.getRandomness();
+        address[] memory winners = _deriveWinner(randomness);
 
-        // update round struct
-        rounds[roundId].randomness = randomness;
+        Round memory round = Round({winners: winners, randomness: randomness, participants: roundParticipants});
+        rounds[roundId] = round;
 
-        // derive winners from randomness
-        uint256[] memory winners = _deriveWinner(randomness);
         if (winners.length == 0) {
             _handleRedistribution();
         } else {
@@ -275,21 +258,19 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         }
 
         // transfer finalizer reward to msg.sender then handover ze rest
-        SafeTransferLib.safeTransferETH(msg.sender, rounds[roundId].finalizerReward);
+        SafeTransferLib.safeTransferETH(msg.sender, finalizerReward);
         _handleLeftOver();
-        emit RoundFinalized(roundId, randomness);
 
-        // move on to ze next round (but issa not started yet)
-        unchecked {
-            roundId++;
-        }
+        roundStartedAt = 0;
+        roundParticipants = 0;
+        emit RoundFinalized(roundId, randomness);
     }
 
-    function _handlePrizes(uint256[] memory winners) internal {
-        uint256 poolSize = address(this).balance - rounds[roundId].finalizerReward;
+    function _handlePrizes(address[] memory winners) internal {
+        uint256 poolSize = (address(this).balance - finalizerReward).mulWadDown(1 ether - treasuryReserve);
         for (uint256 i = 0; i < winners.length; i++) {
-            address winner = idParticipants[roundId][winners[i]];
-            uint256 prizeAmount = poolSize.mulWadDown(rounds[roundId].prizes[i]);
+            address winner = winners[i];
+            uint256 prizeAmount = poolSize.mulWadDown(prizes[i]);
 
             SafeTransferLib.safeTransferETH(winner, prizeAmount);
             emit WonPrize(roundId, winner, i, prizeAmount);
@@ -297,37 +278,34 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     }
 
     function _handleRedistribution() internal {
-        uint256 totalParticipants = rounds[roundId].totalParticipants;
-        uint256 price = rounds[roundId].price;
-        uint256 poolSize = price.mulWadDown(totalParticipants * 1e18) - rounds[roundId].finalizerReward;
-        uint256 amount = poolSize.divWadDown(totalParticipants * 1e18);
-        for (uint256 i = 1; i <= totalParticipants; i++) {
-            address participant = idParticipants[roundId][i];
-
+        uint256 poolSize = (address(this).balance - finalizerReward).mulWadDown(1 ether - treasuryReserve);
+        uint256 amount = poolSize.divWadDown(roundParticipants * 1e18);
+        for (uint256 i = 1; i <= roundParticipants; i++) {
+            address participant = ownerOf(lastRoundLastTokenId + i);
             SafeTransferLib.safeTransferETH(participant, amount);
             emit Redistribution(roundId, participant, amount);
         }
     }
 
     function _handleLeftOver() internal {
-        // TODO: alternative to burning?
-        uint256 redistributionReserve = rounds[roundId].redistributionReserve.mulWadDown(address(this).balance);
-        uint256 leftOver = address(this).balance - redistributionReserve;
-        SafeTransferLib.safeTransferETH(address(0), leftOver);
+        SafeTransferLib.safeTransferETH(address(treasury), address(this).balance);
     }
 
     // derive winnas froma random numba, based on current game configs
-    function _deriveWinner(uint256 _randomness) internal view returns (uint256[] memory) {
+    function _deriveWinner(uint256 _randomness) internal view returns (address[] memory) {
         // if no winner, return empty array
-        if (_randomness % (1e18) < rounds[roundId].noWinnerProbability) {
-            return new uint256[](0);
+        if (_randomness % (1e18) < everyoneWinsProbability) {
+            return new address[](0);
         }
 
         // else, derive winners
-        uint256 prizesCount = rounds[roundId].prizes.length;
-        uint256 totalParticipants = rounds[roundId].totalParticipants;
+        uint256 prizesCount = prizes.length;
 
-        uint256[] memory winners = _rng(_randomness, uint32(totalParticipants), uint32(prizesCount));
+        uint256[] memory winnerIds = _rng(_randomness, uint32(roundParticipants), uint32(prizesCount));
+        address[] memory winners = new address[](winnerIds.length);
+        for (uint256 i = 0; i < winnerIds.length; i++) {
+            winners[i] = ownerOf(winnerIds[i] + lastRoundLastTokenId);
+        }
 
         return winners;
     }
