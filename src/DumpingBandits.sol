@@ -158,6 +158,20 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         }
     }
 
+    function getOwnerTokenIds(address _owner) public view returns (uint256[] memory) {
+        uint256 _balance = balanceOf(_owner);
+        if (_balance == 0) return new uint256[](0);
+        uint256[] memory _tokens = new uint256[](_balance);
+        uint256 tokenCount = 0;
+        for (uint256 i = 1; i <= lastRoundLastTokenId + roundParticipants; i++) {
+            if (ownerOf(i) == _owner) {
+                _tokens[tokenCount] = i;
+                tokenCount++;
+            }
+        }
+        return _tokens;
+    }
+
     /*//////////////////////////////////////////////////////////////
                             GAME RULE SETTERS
     //////////////////////////////////////////////////////////////*/
