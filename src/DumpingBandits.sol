@@ -288,10 +288,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
     function _startRound() internal {
         roundId++;
-        lastRoundLastTokenId = lastRoundLastTokenId + roundParticipants;
-
         roundStartedAt = block.timestamp;
-        roundParticipants = 0;
 
         emit RoundStarted(roundId);
     }
@@ -332,6 +329,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         SafeTransferLib.safeTransferETH(msg.sender, finalizerReward);
         _handleLeftOver();
 
+        lastRoundLastTokenId = lastRoundLastTokenId + roundParticipants;
         roundStartedAt = 0;
         roundParticipants = 0;
         emit RoundFinalized(roundId, randomness);
