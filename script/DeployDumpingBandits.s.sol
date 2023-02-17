@@ -23,6 +23,11 @@ contract DeployDumpingBandits is Script {
         dumpingBandits = new DumpingBandits(address(rc), address(treasury));
         console.log("Deployed DumpingBandits at", address(dumpingBandits));
 
+        dumpingBandits.setPrice(0.02 ether);
+        console.log("Set price to 0.02 ether");
+        dumpingBandits.setFinalizerReward(0.01 ether);
+        console.log("Set finalizer reward to 0.01 ether");
+
         vm.stopBroadcast();
     }
 }
