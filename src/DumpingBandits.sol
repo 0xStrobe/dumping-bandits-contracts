@@ -68,6 +68,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         address[] winners;
         uint256 randomness;
         uint256 participants;
+        uint256 lastRoundLastTokenId;
     }
 
     // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
@@ -175,6 +176,49 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         return _tokens;
     }
 
+    struct OwnerToken {
+        uint256 tokenId;
+        uint256 roundId;
+        uint256 prizePoolSize;
+        uint256 prizeRank;
+    }
+
+    struct RoundToken {
+        uint256 tokenId;
+        address owner;
+        uint256 prizePoolSize;
+        uint256 prizeRank;
+    }
+
+    function getOwnerTokens(address _owner) public view returns (OwnerToken[] memory) {
+        uint256[] memory _tokenIds = getOwnerTokenIds(_owner);
+        if (_tokenIds.length == 0) return new OwnerToken[](0);
+        OwnerToken[] memory _tokens = new OwnerToken[](_tokenIds.length);
+        for (uint256 i = 0; i < _tokenIds.length; i++) {
+            uint256 _tokenId = _tokenIds[i];
+            uint256 _roundId = tokenIdRound[_tokenId];
+            Round memory round = rounds[_roundId];
+            uint256 _prizePoolSize = (round.winners.length * 1e18).mulWadDown(price);
+            uint256 _prizeRank = prizeRank(_tokenId);
+            _tokens[i] = OwnerToken(_tokenId, _roundId, _prizePoolSize, _prizeRank);
+        }
+        return _tokens;
+    }
+
+    function getRoundTokens(uint256 _roundId) public view returns (RoundToken[] memory) {
+        Round memory round = rounds[_roundId];
+        uint256 _lastRoundLastTokenId = round.lastRoundLastTokenId;
+        RoundToken[] memory _tokens = new RoundToken[](round.participants);
+        for (uint256 i = 0; i < round.participants; i++) {
+            uint256 _tokenId = _lastRoundLastTokenId + i + 1;
+            address _owner = ownerOf(_tokenId);
+            uint256 _prizePoolSize = (round.winners.length * 1e18).mulWadDown(price);
+            uint256 _prizeRank = prizeRank(_tokenId);
+            _tokens[i] = RoundToken(_tokenId, _owner, _prizePoolSize, _prizeRank);
+        }
+        return _tokens;
+    }
+
     /*//////////////////////////////////////////////////////////////
                             GAME RULE SETTERS
     //////////////////////////////////////////////////////////////*/
@@ -270,7 +314,12 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         uint256 randomness = rc.getRandomness();
         address[] memory winners = _deriveWinner(randomness);
 
-        Round memory round = Round({winners: winners, randomness: randomness, participants: roundParticipants});
+        Round memory round = Round({
+            winners: winners,
+            randomness: randomness,
+            participants: roundParticipants,
+            lastRoundLastTokenId: lastRoundLastTokenId
+        });
         rounds[roundId] = round;
 
         if (winners.length == 0) {
