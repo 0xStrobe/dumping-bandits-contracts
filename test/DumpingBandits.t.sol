@@ -43,6 +43,8 @@ contract DumpingBanditsTest is Test {
 
         vm.warp(t4);
         dumpingBandits.finalizeRound();
+        // console.log("winner: ", dumpingBandits.roundWinners(1, 0));
+        console.log("winner: ", dumpingBandits.roundWinnersArray(1)[0]);
 
         vm.warp(t4 + 1 minutes);
         dumpingBandits.participate{value: 0.02 ether}();

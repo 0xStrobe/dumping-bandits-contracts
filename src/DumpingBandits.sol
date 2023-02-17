@@ -7,6 +7,7 @@ import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
 import {ReentrancyGuard} from "solmate/utils/ReentrancyGuard.sol";
 import "solmate/utils/SafeTransferLib.sol";
 import "openzeppelin-contracts/contracts/utils/Strings.sol";
+import "forge-std/Script.sol";
 
 import {IRandomnessClient} from "./interfaces/IRandomnessClient.sol";
 import {IBanditTreasury} from "./interfaces/IBanditTreasury.sol";
@@ -65,7 +66,6 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
                                 GAME HISTORY
     //////////////////////////////////////////////////////////////*/
     struct Round {
-        address[] winners;
         uint256 randomness;
         uint256 participants;
         uint256 lastRoundLastTokenId;
@@ -74,15 +74,21 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     // gas on canto issa beri cheapo so we can jussa store all ze past rounds fora ez luke up
     mapping(uint256 => Round) public rounds; // roundId => Round
     mapping(uint256 => uint256) public tokenIdRound; // tokenId => roundId
+    mapping(uint256 => address[]) public roundWinners; // roundId => winners
+
+    function roundWinnersArray(uint256 _roundId) public view returns (address[] memory) {
+        return roundWinners[_roundId];
+    }
 
     function prizeRank(uint256 _tokenId) public view returns (uint256) {
         uint256 _roundId = tokenIdRound[_tokenId];
         Round memory round = rounds[_roundId];
+        address[] memory winners = roundWinners[_roundId];
         bool everyoneWins = (round.randomness % 1 ether <= everyoneWinsProbability);
         if (everyoneWins) return type(uint256).max;
 
-        for (uint256 i = 1; i < round.winners.length; i++) {
-            if (round.winners[i] == ownerOf(_tokenId)) return i + 1;
+        for (uint256 i = 1; i < winners.length; i++) {
+            if (winners[i] == ownerOf(_tokenId)) return i + 1;
         }
         return 0;
     }
@@ -140,8 +146,8 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     function tokenInfo(uint256 _tokenId) public view returns (string memory) {
         uint256 _roundId = tokenIdRound[_tokenId];
-        Round memory round = rounds[_roundId];
-        uint256 _totalWinners = round.winners.length;
+        address[] memory winners = roundWinners[_roundId];
+        uint256 _totalWinners = winners.length;
         uint256 _prizeRank = prizeRank(_tokenId);
 
         if (_prizeRank != type(uint256).max) {
@@ -198,7 +204,8 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
             uint256 _tokenId = _tokenIds[i];
             uint256 _roundId = tokenIdRound[_tokenId];
             Round memory round = rounds[_roundId];
-            uint256 _prizePoolSize = (round.winners.length * 1e18).mulWadDown(price);
+            address[] memory winners = roundWinners[_roundId];
+            uint256 _prizePoolSize = (winners.length * 1e18).mulWadDown(price);
             uint256 _prizeRank = prizeRank(_tokenId);
             _tokens[i] = OwnerToken(_tokenId, _roundId, _prizePoolSize, _prizeRank);
         }
@@ -207,12 +214,13 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     function getRoundTokens(uint256 _roundId) public view returns (RoundToken[] memory) {
         Round memory round = rounds[_roundId];
+        address[] memory winners = roundWinners[_roundId];
         uint256 _lastRoundLastTokenId = round.lastRoundLastTokenId;
         RoundToken[] memory _tokens = new RoundToken[](round.participants);
         for (uint256 i = 0; i < round.participants; i++) {
             uint256 _tokenId = _lastRoundLastTokenId + i + 1;
             address _owner = ownerOf(_tokenId);
-            uint256 _prizePoolSize = (round.winners.length * 1e18).mulWadDown(price);
+            uint256 _prizePoolSize = (winners.length * 1e18).mulWadDown(price);
             uint256 _prizeRank = prizeRank(_tokenId);
             _tokens[i] = RoundToken(_tokenId, _owner, _prizePoolSize, _prizeRank);
         }
@@ -311,13 +319,10 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         uint256 randomness = rc.getRandomness();
         address[] memory winners = _deriveWinner(randomness);
 
-        Round memory round = Round({
-            winners: winners,
-            randomness: randomness,
-            participants: roundParticipants,
-            lastRoundLastTokenId: lastRoundLastTokenId
-        });
+        Round memory round =
+            Round({randomness: randomness, participants: roundParticipants, lastRoundLastTokenId: lastRoundLastTokenId});
         rounds[roundId] = round;
+        roundWinners[roundId] = winners;
 
         if (winners.length == 0) {
             _handleRedistribution();
