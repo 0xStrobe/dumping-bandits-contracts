@@ -150,7 +150,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         uint256 _totalWinners = winners.length;
         uint256 _prizeRank = prizeRank(_tokenId);
 
-        if (_prizeRank != type(uint256).max) {
+        if (_prizeRank == type(uint256).max) {
             return string(abi.encodePacked("Round ", Strings.toString(_roundId), " - Everyone wins!"));
         } else if (_prizeRank == 0) {
             return string(abi.encodePacked("Round ", Strings.toString(_roundId), " - Did not win."));
