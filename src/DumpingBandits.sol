@@ -386,7 +386,11 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         uint256 a = 25214903917;
         uint256 c = 11;
         uint256 m = 281474976710656; // 2^48
-        return uint32((a * _seed + c) % m >> 16);
+        uint256 num;
+        unchecked {
+            num = (a * _seed + c) % m;
+        }
+        return uint32(num >> 16);
     }
 
     /// generate `_count` random numbers between 1 and _max (inclusive) without duplicates
