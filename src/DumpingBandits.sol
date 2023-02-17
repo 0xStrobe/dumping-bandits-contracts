@@ -203,7 +203,6 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
         for (uint256 i = 0; i < _tokenIds.length; i++) {
             uint256 _tokenId = _tokenIds[i];
             uint256 _roundId = tokenIdRound[_tokenId];
-            Round memory round = rounds[_roundId];
             address[] memory winners = roundWinners[_roundId];
             uint256 _prizePoolSize = (winners.length * 1e18).mulWadDown(price);
             uint256 _prizeRank = prizeRank(_tokenId);
