@@ -47,7 +47,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     uint256 public minDuration = 15 minutes;
     uint256 public everyoneWinsProbability = 0.00_0001 ether; // 0.0001%
     uint256[] public prizes = [0.4 ether, 0.25 ether, 0.15 ether]; // take home 40%, 25%, 15% of ze pot
-    uint256 public finalizerReward = 10 ether;
+    uint256 public finalizerReward = 5 ether;
     uint256 public treasuryReserve = 0.2 ether; // send 20% per round to ze treasury as house monies
 
     /*//////////////////////////////////////////////////////////////
