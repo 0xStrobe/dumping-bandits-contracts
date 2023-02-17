@@ -28,6 +28,8 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     IRandomnessClient public rc;
     IBanditTreasury public treasury;
 
+    string public baseURI = "https://dumpingbandits/nft/";
+
     constructor(address _rc, address _treasury) ERC721("Dumping Bandits", "BANDIT") {
         if (_rc == address(0) || _treasury == address(0)) revert ZERO_ADDRESS();
         owner = msg.sender;
@@ -97,6 +99,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     event SetPrizes(uint256[] prizes);
     event SetFinalizerReward(uint256 finalizerReward);
     event SetTreasuryReserve(uint256 treasuryReserve);
+    event SetBaseURI(string baseURI);
 
     event WonPrize(uint256 indexed roundId, address indexed participant, uint256 prizeId, uint256 prizeAmount);
     event Redistribution(uint256 indexed roundId, address indexed participant, uint256 amount);
@@ -130,8 +133,8 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     /*//////////////////////////////////////////////////////////////
                                 NFT STUFF
     //////////////////////////////////////////////////////////////*/
-    function tokenURI(uint256 _tokenId) public pure override returns (string memory) {
-        return string(abi.encodePacked("https://dumpingbandits.canto.life/nft/", Strings.toString(_tokenId)));
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        return string(abi.encodePacked(baseURI, Strings.toString(_tokenId)));
     }
 
     function tokenInfo(uint256 _tokenId) public view returns (string memory) {
@@ -229,6 +232,11 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
     function setTreasuryReserve(uint256 _treasuryReserve) public onlyOwner {
         treasuryReserve = _treasuryReserve;
         emit SetTreasuryReserve(_treasuryReserve);
+    }
+
+    function setBaseURI(string memory _baseURI) public onlyOwner {
+        baseURI = _baseURI;
+        emit SetBaseURI(baseURI);
     }
 
     /*//////////////////////////////////////////////////////////////
