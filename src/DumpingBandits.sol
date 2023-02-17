@@ -76,7 +76,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     function prizeRank(uint256 _tokenId) public view returns (uint256) {
         uint256 _roundId = tokenIdRound[_tokenId];
-        Round storage round = rounds[_roundId];
+        Round memory round = rounds[_roundId];
         bool everyoneWins = (round.randomness % 1 ether <= everyoneWinsProbability);
         if (everyoneWins) return type(uint256).max;
 
@@ -139,7 +139,7 @@ contract DumpingBandits is ERC721, ReentrancyGuard {
 
     function tokenInfo(uint256 _tokenId) public view returns (string memory) {
         uint256 _roundId = tokenIdRound[_tokenId];
-        Round storage round = rounds[_roundId];
+        Round memory round = rounds[_roundId];
         uint256 _totalWinners = round.winners.length;
         uint256 _prizeRank = prizeRank(_tokenId);
 
