@@ -44,4 +44,8 @@ contract BanditTreasury is IBanditTreasury {
     function withdrawEth(address payable _to, uint256 _amount) external onlyWithdrawer {
         SafeTransferLib.safeTransferETH(_to, _amount);
     }
+
+    fallback() external payable {}
+
+    receive() external payable {}
 }
